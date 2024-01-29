@@ -78,7 +78,10 @@ executable functional-shop
         persistent-sqlite,
         persistent-template,
         Spock-core,
-        http-types
+        http-types,
+        bcrypt,
+        bytestring,
+        transformers
     -- Directories containing source files.
     hs-source-dirs:   src
     -- Base language which the package is written in.
