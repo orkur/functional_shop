@@ -19,21 +19,14 @@ module Main where
 
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Logger (LoggingT, runStdoutLoggingT)
-import Control.Monad.Trans.Class (lift)
-import Crypto.BCrypt (HashingPolicy (HashingPolicy), hashPassword, hashPasswordUsingPolicy, slowerBcryptHashingPolicy)
-import qualified Crypto.BCrypt as BCrypt
-import Data.Aeson (KeyValue ((.=)), Value (Bool, String), object)
-import Data.ByteString.Char8 (pack)
+import Crypto.BCrypt
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
-import Database.Persist (PersistQueryRead (selectFirst))
 import Database.Persist as Persist hiding (get)
-import Database.Persist.Sql (delete)
 import Database.Persist.Sqlite hiding (get, insert)
 import Database.Persist.TH
 import Network.HTTP.Types.Status
 import Web.Spock as Web
-import Web.Spock.Action
 import Web.Spock.Config (PoolOrConn (PCPool), defaultSpockCfg)
 
 share
@@ -70,45 +63,50 @@ app = do
         case result of
           Left err -> setStatus status400 >> text err
           Right _ -> setStatus status200 >> text "registered"
+  get "users" $ do
+    allPeople <- runSQL $ selectList [] [Asc UserId]
+    json allPeople
 
 registerUser :: User -> ApiAction (Either Text ())
-registerUser user =
-  if True
-    then return $ Left "Error!"
-    else return $ Right ()
+registerUser user = do
+  userExists <- isNameExists (userName user)
+  if userExists
+    then return $ Left "User with this username exists!"
+    else do
+      mailExists <- isEmailExists (userEmail user)
+      if mailExists
+        then return $ Left "User with this Mail exists!"
+        else do
+          hashedPassword <- hashPassword' (userPassword user)
+          case hashedPassword of
+            Nothing -> return $ Left "there's problem with password, please use latin characters!"
+            Just pass ->
+              runSQL (insert (User (userName user) (userEmail user) pass False))
+                >> return (Right ())
 
--- registerUser :: User -> SqlPersistT (LoggingT IO) (Either Text ())
--- registerUser user = do
---   existsUser <- runSQL $ selectFirst [UserName ==. userName user] []
---   case existsUser of
---     Just _ -> return $ Left "User exists!"
---     Nothing -> do
---       existsMail <- runSQL $ selectFirst [UserEmail ==. userEmail user] []
---       case existsMail of
---         Just _ -> return $ Left "Mail exists!"
---         Nothing -> do
---           hashedPassword <- hashPassword' (userPassword user)
---           case hashedPassword of
---             Nothing -> lift $ return $ Left "there's problem with password, please use latin characters!"
---             Just existsPassword -> do
---               runSQL $ insert (User (userName user) (userEmail user) existsPassword False)
---               return $ Right ()
+isNameExists :: Text -> ApiAction Bool
+isNameExists name = do
+  existUser <- runSQL $ selectFirst [UserName ==. name] []
+  case existUser of
+    Just _ -> return True
+    Nothing -> return False
 
-hashPassword' :: Text -> SqlPersistT (LoggingT IO) (Maybe Text)
+isEmailExists :: Text -> ApiAction Bool
+isEmailExists email = do
+  existUser <- runSQL $ selectFirst [UserEmail ==. email] []
+  case existUser of
+    Just _ -> return True
+    Nothing -> return False
+
+hashPassword' :: Text -> ApiAction (Maybe Text)
 hashPassword' password = do
   hashedPassword <- liftIO $ hashPasswordUsingPolicy slowerBcryptHashingPolicy (encodeUtf8 password)
-  return $ decodeUtf8 <$> hashedPassword
+  case hashedPassword of
+    Just pass -> return $ Just (decodeUtf8 pass)
+    Nothing -> return Nothing
 
 runSQL ::
   (HasSpock m, SpockConn m ~ SqlBackend) =>
   SqlPersistT (LoggingT IO) a ->
   m a
 runSQL action = runQuery $ \conn -> runStdoutLoggingT $ runSqlConn action conn
-
-errorJson :: Int -> Text -> ApiAction ()
-errorJson code message =
-  json $
-    object
-      [ "result" .= String "failure",
-        "error" .= object ["code" .= code, "message" .= message]
-      ]
