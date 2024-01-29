@@ -67,22 +67,18 @@ app = do
     allPeople <- runSQL $ selectList [] [Asc UserId]
     json allPeople
 
+-- get
+
 registerUser :: User -> ApiAction (Either Text ())
 registerUser user = do
   userExists <- isNameExists (userName user)
-  if userExists
-    then return $ Left "User with this username exists!"
-    else do
-      mailExists <- isEmailExists (userEmail user)
-      if mailExists
-        then return $ Left "User with this Mail exists!"
-        else do
-          hashedPassword <- hashPassword' (userPassword user)
-          case hashedPassword of
-            Nothing -> return $ Left "there's problem with password, please use latin characters!"
-            Just pass ->
-              runSQL (insert (User (userName user) (userEmail user) pass False))
-                >> return (Right ())
+  mailExists <- isEmailExists (userEmail user)
+  hashedPassword <- hashPassword' (userPassword user)
+  case (userExists, mailExists, hashedPassword) of
+    (True, _, _) -> return $ Left "User with this username exists!"
+    (_, True, _) -> return $ Left "User with this Mail exists!"
+    (_, _, Nothing) -> return $ Left "there's problem with password, please use latin characters!"
+    (_, _, Just pass) -> runSQL (insert (User (userName user) (userEmail user) pass False)) >> return (Right ())
 
 isNameExists :: Text -> ApiAction Bool
 isNameExists name = do
