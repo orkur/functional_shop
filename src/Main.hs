@@ -23,13 +23,10 @@ import Crypto.BCrypt
 import Data.Aeson.TH (defaultOptions, deriveJSON)
 import Data.Text (Text, pack)
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
-import Data.Time.Clock (NominalDiffTime, addUTCTime, getCurrentTime)
-import Data.Time.Clock.POSIX (getPOSIXTime)
 import Database.Persist as Persist hiding (get)
 import Database.Persist.Sqlite hiding (get, insert)
 import Database.Persist.TH
 import GHC.Generics
-import qualified GHC.TypeError as Data
 import Network.HTTP.Types.Status
 import Web.JWT
 import Web.Spock as Web
@@ -41,9 +38,6 @@ secretKey = "STRENG GEHEIM"
 
 issuer :: Text
 issuer = "localhost:8080"
-
-encode :: String -> Text
-encode = pack
 
 share
   [mkPersist sqlSettings, mkMigrate "migrateAll"]
@@ -105,7 +99,7 @@ loginUser name pass = do
   case user of
     Nothing -> return $ Left "User with this username doesn't exist!"
     Just usr -> do
-      if not $ validatePassword (encodeUtf8 pass) (encodeUtf8 $ userPassword $ entityVal usr)
+      if not (validatePassword (encodeUtf8 $ userPassword $ entityVal usr) (encodeUtf8 pass))
         then return $ Left "Wrong Password!"
         else return $ Right (generateJwtToken $ userName $ entityVal usr)
 
@@ -117,7 +111,7 @@ generateJwtToken username = do
           { iss = stringOrURI issuer,
             sub = stringOrURI username
           }
-      key = hmacSecret . pack $ secretKey
+      key = hmacSecret . Data.Text.pack $ secretKey
    in return $ encodeSigned key mempty cs
 
 -- TODO validate token
