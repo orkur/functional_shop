@@ -81,7 +81,9 @@ executable functional-shop
         http-types,
         bcrypt,
         bytestring,
-        transformers
+        transformers,
+        time,
+        jwt
     -- Directories containing source files.
     hs-source-dirs:   src
     -- Base language which the package is written in.
