@@ -132,29 +132,29 @@ app = do
           Right _ -> setStatus status200 >> text "password changed"
   post "post-blog" $ do
     newBlog <- jsonBody' :: ApiAction (Maybe SimpleBlog)
-    -- time <- getCurrentTime
+    time <- liftIO getCurrentTime
     userName <- jwtMiddleware
     case (newBlog, userName) of
       (Nothing, _) -> setStatus status400 >> text "Blog doesn't provided"
       (_, Left err) -> setStatus status401 >> text err
       (Just blog, Right name) -> do
-        userId <- getUserId name
-        case userId of
+        insertBlog blog time name >>= \case
           Left err -> setStatus status400 >> text err
-          Right number -> setStatus status200 >> text (pack $ show number)
+          Right _ -> setStatus status200 >> text "Article added"
 
--- insertBlog blog time name
+insertBlog :: SimpleBlog -> UTCTime -> Text -> ApiAction (Either Text ())
+insertBlog blog time name = do
+  id <- getUserId name
+  case id of
+    Left err -> return $ Left err
+    Right number -> runSQL (insert (Blog (title blog) (content blog) (Just number) time)) >> return (Right ())
 
--- insertBlog :: SimpleBlog -> UTCTime -> Text -> ApiAction ()
--- insertBlog blog time name = do
---   runSQL (insert (Blog (title blog) (content blog) (getUserId name) time))
-
-getUserId :: Text -> ApiAction (Either Text Int64)
+getUserId :: Text -> ApiAction (Either Text (Key User))
 getUserId name = do
   user <- runSQL $ selectFirst [UserName ==. name] []
   case user of
     Nothing -> return $ Left "User does not exist"
-    Just (Entity userId _) -> return $ Right (fromSqlKey userId)
+    Just (Entity userId _) -> return $ Right userId
 
 verifyJwt :: Text -> Maybe (JWT VerifiedJWT)
 verifyJwt inp =
