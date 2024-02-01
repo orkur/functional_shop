@@ -6,6 +6,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
@@ -21,15 +22,12 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Logger (LoggingT, runStdoutLoggingT)
 import Crypto.BCrypt
 import Data.Aeson.TH (defaultOptions, deriveJSON)
-import qualified Data.ByteString as T
-import Data.Maybe (fromMaybe)
 import Data.Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Database.Persist as Persist hiding (get)
-import Database.Persist.Sqlite hiding (get, insert)
+import Database.Persist.Sqlite as Sqlite hiding (delete, get, insert)
 import Database.Persist.TH
 import GHC.Generics
-import qualified GHC.TypeError as Data
 import Network.HTTP.Types.Status
 import Web.JWT
 import Web.Spock as Web
@@ -99,11 +97,47 @@ app = do
     authenticate <- jwtMiddleware
     case authenticate of
       Left err -> setStatus status401 >> text err
-      Right id -> do
-        result <- deleteUser id
+      Right name -> do
+        result <- deleteUser name
         case result of
           Left err -> setStatus status404 >> text err
           Right _ -> setStatus status200 >> text "Hooray!"
+
+verifyJwt :: Text -> Maybe (JWT VerifiedJWT)
+verifyJwt inp =
+  case decode inp of
+    Nothing -> Nothing
+    Just uJWT -> verify (toVerify $ hmacSecret secretKey) =<< Just uJWT
+
+loginUser :: Text -> Text -> ApiAction (Either Text (IO Text))
+loginUser name pass = do
+  user <- runSQL $ selectFirst [UserName ==. name] []
+  case user of
+    Nothing -> return $ Left "User with this username doesn't exist!"
+    Just usr -> do
+      if not (validatePassword (encodeUtf8 $ userPassword $ entityVal usr) (encodeUtf8 pass))
+        then return $ Left "Wrong Password!"
+        else return $ Right (generateJwtToken $ userName $ entityVal usr)
+
+deleteUser :: Text -> ApiAction (Either Text ())
+deleteUser name =
+  -- this way only for improving skills :)
+  isNameExists name
+    >>= \x ->
+      if not x
+        then return $ Left "User doesn't exist"
+        else runSQL (deleteWhere [UserName ==. name]) >> return (Right ())
+
+generateJwtToken :: Text -> IO Text
+generateJwtToken username = do
+  -- TODO expiration date maybe
+  let cs =
+        mempty
+          { iss = stringOrURI issuer,
+            sub = stringOrURI username
+          } -- There is currently no verification of time related information (exp, nbf, iat).
+      key = hmacSecret secretKey
+   in return $ encodeSigned key mempty cs
 
 jwtMiddleware :: ApiAction (Either Text Text)
 jwtMiddleware = do
@@ -121,63 +155,6 @@ jwtMiddleware = do
               case sub $ claims payload of
                 Nothing -> return $ Left "Unauthorized: Missing 'sub'"
                 Just ansT -> return $ Right $ stringOrURIToText ansT
-
-verifyJwt :: Text -> Maybe (JWT VerifiedJWT)
-verifyJwt inp =
-  case decode inp of
-    Nothing -> Nothing
-    Just uJWT -> verify (toVerify $ hmacSecret secretKey) =<< Just uJWT
-
--- case fmap claims token of
---             Nothing -> return $ Left "Unauthorized"
---             Just ans ->
---               case sub ans of
---                 Nothing -> return $ Left "Unauthorized"
---                 Just ansT -> return $
-
--- jwtMiddleware :: ApiAction () -> ApiAction ()
--- jwtMiddleware action = do
---   maybeToken <- Web.header "Authorization"
---   case maybeToken of
---     Nothing -> unauthorized
---     Just token -> do
---       let tokenStr = fromMaybe "" $ Data.Text.stripPrefix "Bearer " token
---       case Jwt.decodeCompact $ LBS.fromStrict $ encodeUtf8 tokenStr of
---         Left _ -> unauthorized
---         Right jwt -> do
---           let verificationKey = undefined -- Your verification key
---           case Jws.verify Jwa.RS256 verificationKey jwt of
---             Left _ -> unauthorized
---             Right _ -> action
---   where
---     unauthorized = Spock.setStatus Spock.status401 >> Spock.json ("Unauthorized" :: T.Text)
-
-loginUser :: Text -> Text -> ApiAction (Either Text (IO Text))
-loginUser name pass = do
-  user <- runSQL $ selectFirst [UserName ==. name] []
-  case user of
-    Nothing -> return $ Left "User with this username doesn't exist!"
-    Just usr -> do
-      if not (validatePassword (encodeUtf8 $ userPassword $ entityVal usr) (encodeUtf8 pass))
-        then return $ Left "Wrong Password!"
-        else return $ Right (generateJwtToken $ userName $ entityVal usr)
-
-deleteUser :: Text -> ApiAction (Either Text ())
-deleteUser id =
-  return $ Left id
-
-generateJwtToken :: Text -> IO Text
-generateJwtToken username = do
-  -- TODO expiration date maybe
-  let cs =
-        mempty
-          { iss = stringOrURI issuer,
-            sub = stringOrURI username
-          } -- There is currently no verification of time related information (exp, nbf, iat).
-      key = hmacSecret secretKey
-   in return $ encodeSigned key mempty cs
-
--- TODO validate token
 
 registerUser :: SimpleUser -> ApiAction (Either Text ())
 registerUser user = do

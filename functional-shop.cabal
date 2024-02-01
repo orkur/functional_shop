@@ -83,7 +83,7 @@ executable functional-shop
         bytestring,
         transformers,
         time,
-        jwt
+        jwt,
     -- Directories containing source files.
     hs-source-dirs:   src
     -- Base language which the package is written in.
