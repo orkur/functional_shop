@@ -21,20 +21,23 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Logger (LoggingT, runStdoutLoggingT)
 import Crypto.BCrypt
 import Data.Aeson.TH (defaultOptions, deriveJSON)
-import Data.Text (Text, pack)
+import qualified Data.ByteString as T
+import Data.Maybe (fromMaybe)
+import Data.Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Database.Persist as Persist hiding (get)
 import Database.Persist.Sqlite hiding (get, insert)
 import Database.Persist.TH
 import GHC.Generics
+import qualified GHC.TypeError as Data
 import Network.HTTP.Types.Status
 import Web.JWT
 import Web.Spock as Web
 import Web.Spock.Config (PoolOrConn (PCPool), defaultSpockCfg)
 import Prelude hiding (exp)
 
-secretKey :: String
-secretKey = "STRENG GEHEIM"
+secretKey :: Text
+secretKey = "SŁOWA"
 
 issuer :: Text
 issuer = "localhost:8080"
@@ -92,6 +95,62 @@ app = do
         case result of
           Left err -> setStatus status400 >> text err
           Right token -> setStatus status200 >> liftIO token >>= json
+  Web.delete "delete-account" $ do
+    authenticate <- jwtMiddleware
+    case authenticate of
+      Left err -> setStatus status401 >> text err
+      Right id -> do
+        result <- deleteUser id
+        case result of
+          Left err -> setStatus status404 >> text err
+          Right _ -> setStatus status200 >> text "Hooray!"
+
+jwtMiddleware :: ApiAction (Either Text Text)
+jwtMiddleware = do
+  maybeToken <- Web.header "Authorization"
+  case maybeToken of
+    Nothing -> return $ Left "Unauthorized: Missing authorization header"
+    Just token -> do
+      let bearer = Data.Text.stripPrefix "Bearer " token
+      case bearer of
+        Nothing -> return $ Left "Unauthorized: Missing bearer"
+        Just tokenJWT ->
+          case verifyJwt tokenJWT of
+            Nothing -> return $ Left "Unauthorize: Invalid token"
+            Just payload ->
+              case sub $ claims payload of
+                Nothing -> return $ Left "Unauthorized: Missing 'sub'"
+                Just ansT -> return $ Right $ stringOrURIToText ansT
+
+verifyJwt :: Text -> Maybe (JWT VerifiedJWT)
+verifyJwt inp =
+  case decode inp of
+    Nothing -> Nothing
+    Just uJWT -> verify (toVerify $ hmacSecret secretKey) =<< Just uJWT
+
+-- case fmap claims token of
+--             Nothing -> return $ Left "Unauthorized"
+--             Just ans ->
+--               case sub ans of
+--                 Nothing -> return $ Left "Unauthorized"
+--                 Just ansT -> return $
+
+-- jwtMiddleware :: ApiAction () -> ApiAction ()
+-- jwtMiddleware action = do
+--   maybeToken <- Web.header "Authorization"
+--   case maybeToken of
+--     Nothing -> unauthorized
+--     Just token -> do
+--       let tokenStr = fromMaybe "" $ Data.Text.stripPrefix "Bearer " token
+--       case Jwt.decodeCompact $ LBS.fromStrict $ encodeUtf8 tokenStr of
+--         Left _ -> unauthorized
+--         Right jwt -> do
+--           let verificationKey = undefined -- Your verification key
+--           case Jws.verify Jwa.RS256 verificationKey jwt of
+--             Left _ -> unauthorized
+--             Right _ -> action
+--   where
+--     unauthorized = Spock.setStatus Spock.status401 >> Spock.json ("Unauthorized" :: T.Text)
 
 loginUser :: Text -> Text -> ApiAction (Either Text (IO Text))
 loginUser name pass = do
@@ -103,6 +162,10 @@ loginUser name pass = do
         then return $ Left "Wrong Password!"
         else return $ Right (generateJwtToken $ userName $ entityVal usr)
 
+deleteUser :: Text -> ApiAction (Either Text ())
+deleteUser id =
+  return $ Left id
+
 generateJwtToken :: Text -> IO Text
 generateJwtToken username = do
   -- TODO expiration date maybe
@@ -110,8 +173,8 @@ generateJwtToken username = do
         mempty
           { iss = stringOrURI issuer,
             sub = stringOrURI username
-          }
-      key = hmacSecret . Data.Text.pack $ secretKey
+          } -- There is currently no verification of time related information (exp, nbf, iat).
+      key = hmacSecret secretKey
    in return $ encodeSigned key mempty cs
 
 -- TODO validate token
