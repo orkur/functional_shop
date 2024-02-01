@@ -25,10 +25,12 @@ import Crypto.BCrypt
 import Data.Aeson.TH (defaultOptions, deriveJSON)
 import Data.Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
+import Data.Time (UTCTime, getCurrentTime)
 import Database.Persist as Persist hiding (get)
 import Database.Persist.Sqlite as Sqlite hiding (delete, get, insert)
 import Database.Persist.TH
 import GHC.Generics
+import GHC.Int (Int64)
 import Network.HTTP.Types.Status
 import Web.JWT
 import Web.Spock as Web
@@ -50,6 +52,14 @@ User json
     password Text
     isAdmin Bool
     deriving Show
+Blog json
+    title Text
+    content Text 
+    authorId UserId Maybe
+    publicationDate UTCTime
+Tags json
+    name Text 
+    blog BlogId
 |]
 
 data Credentials = Credentials {credUsername :: Text, credPassword :: Text} deriving (Generic, Show)
@@ -58,9 +68,12 @@ data SimpleUser = SimpleUser {name :: Text, email :: Text, password :: Text} der
 
 data ChangePassword = ChangePassword {oldPassword :: Text, newPassword :: Text} deriving (Generic, Show)
 
+data SimpleBlog = SimpleBlog {title :: Text, content :: Text} deriving (Generic, Show)
+
 $(deriveJSON defaultOptions ''Credentials)
 $(deriveJSON defaultOptions ''SimpleUser)
 $(deriveJSON defaultOptions ''ChangePassword)
+$(deriveJSON defaultOptions ''SimpleBlog)
 
 type Api = SpockM SqlBackend () () ()
 
@@ -117,6 +130,31 @@ app = do
         case result of
           Left err -> setStatus status400 >> text err
           Right _ -> setStatus status200 >> text "password changed"
+  post "post-blog" $ do
+    newBlog <- jsonBody' :: ApiAction (Maybe SimpleBlog)
+    -- time <- getCurrentTime
+    userName <- jwtMiddleware
+    case (newBlog, userName) of
+      (Nothing, _) -> setStatus status400 >> text "Blog doesn't provided"
+      (_, Left err) -> setStatus status401 >> text err
+      (Just blog, Right name) -> do
+        userId <- getUserId name
+        case userId of
+          Left err -> setStatus status400 >> text err
+          Right number -> setStatus status200 >> text (pack $ show number)
+
+-- insertBlog blog time name
+
+-- insertBlog :: SimpleBlog -> UTCTime -> Text -> ApiAction ()
+-- insertBlog blog time name = do
+--   runSQL (insert (Blog (title blog) (content blog) (getUserId name) time))
+
+getUserId :: Text -> ApiAction (Either Text Int64)
+getUserId name = do
+  user <- runSQL $ selectFirst [UserName ==. name] []
+  case user of
+    Nothing -> return $ Left "User does not exist"
+    Just (Entity userId _) -> return $ Right (fromSqlKey userId)
 
 verifyJwt :: Text -> Maybe (JWT VerifiedJWT)
 verifyJwt inp =
