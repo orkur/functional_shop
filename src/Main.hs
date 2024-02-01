@@ -20,6 +20,7 @@ module Main where
 
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Logger (LoggingT, runStdoutLoggingT)
+import Control.Monad.Trans.Maybe (MaybeT (MaybeT))
 import Crypto.BCrypt
 import Data.Aeson.TH (defaultOptions, deriveJSON)
 import Data.Text
@@ -55,8 +56,11 @@ data Credentials = Credentials {credUsername :: Text, credPassword :: Text} deri
 
 data SimpleUser = SimpleUser {name :: Text, email :: Text, password :: Text} deriving (Generic, Show)
 
+data ChangePassword = ChangePassword {oldPassword :: Text, newPassword :: Text} deriving (Generic, Show)
+
 $(deriveJSON defaultOptions ''Credentials)
 $(deriveJSON defaultOptions ''SimpleUser)
+$(deriveJSON defaultOptions ''ChangePassword)
 
 type Api = SpockM SqlBackend () () ()
 
@@ -101,7 +105,18 @@ app = do
         result <- deleteUser name
         case result of
           Left err -> setStatus status404 >> text err
-          Right _ -> setStatus status200 >> text "Hooray!"
+          Right _ -> setStatus status200 >> text "User has been deleted!"
+  put "change-password" $ do
+    authenticate <- jwtMiddleware
+    passwords <- jsonBody' :: ApiAction (Maybe ChangePassword)
+    case (authenticate, passwords) of
+      (Left err, _) -> setStatus status401 >> text err
+      (_, Nothing) -> setStatus status400 >> text "Anvalid data"
+      (Right name, Just pass) -> do
+        result <- changePassword name pass
+        case result of
+          Left err -> setStatus status400 >> text err
+          Right _ -> setStatus status200 >> text "password changed"
 
 verifyJwt :: Text -> Maybe (JWT VerifiedJWT)
 verifyJwt inp =
@@ -127,6 +142,18 @@ deleteUser name =
       if not x
         then return $ Left "User doesn't exist"
         else runSQL (deleteWhere [UserName ==. name]) >> return (Right ())
+
+changePassword :: Text -> ChangePassword -> ApiAction (Either Text ())
+changePassword name pass = do
+  user <- runSQL $ selectFirst [UserName ==. name] []
+  hashedPassword <- hashPassword' (newPassword pass)
+  case (user, hashedPassword) of
+    (Nothing, _) -> return $ Left "User doesn't exist!"
+    (_, Nothing) -> return $ Left "Hashing error!"
+    (Just usr, Just correctPassword) -> do
+      if not (validatePassword (encodeUtf8 $ userPassword $ entityVal usr) (encodeUtf8 $ oldPassword pass))
+        then return $ Left "Wrong Password!"
+        else runSQL $ updateWhere [UserName ==. name] [UserPassword =. correctPassword] >> return (Right ())
 
 generateJwtToken :: Text -> IO Text
 generateJwtToken username = do
