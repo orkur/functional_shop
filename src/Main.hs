@@ -57,7 +57,7 @@ User json
 Blog json
     title Text
     content Text 
-    authorId UserId Maybe
+    authorId UserId Maybe OnDeleteSetNull
     publicationDate UTCTime
 Tags json
     name Text 
@@ -171,12 +171,24 @@ app = do
         (_, _) -> setStatus status400 >> text "Wrong param"
       _ -> setStatus status400 >> text "Wrong param length"
 
-makeSimpleBlog :: (Single Text, Single Text, Single UTCTime, Single Text) -> SimpleBlog
-makeSimpleBlog (Single titles, Single contents, Single publicationDates, Single authorNames) = SimpleBlog {title = titles, content = contents, date = Just publicationDates, author = Just authorNames}
+--   post "add-tag" $ do
+
+-- -- TODO
+
+makeSimpleBlog :: (Single Text, Single Text, Single UTCTime, Single (Maybe Text)) -> SimpleBlog
+makeSimpleBlog (Single titles, Single contents, Single publicationDates, Single authorNames) =
+  SimpleBlog
+    { title = titles,
+      content = contents,
+      date = Just publicationDates,
+      author = case authorNames of
+        Nothing -> Just "deleted"
+        Just name -> Just name
+    }
 
 -- bit shady, but documentation says that there aren't any other way to make join
-getArticleAndAuthor :: (MonadIO m) => ReaderT SqlBackend m [(Single Text, Single Text, Single UTCTime, Single Text)]
-getArticleAndAuthor = rawSql "select blog.title, blog.content, blog.publication_date, user.name from user, blog where user.id = blog.author_id" []
+getArticleAndAuthor :: (MonadIO m) => ReaderT SqlBackend m [(Single Text, Single Text, Single UTCTime, Single (Maybe Text))]
+getArticleAndAuthor = rawSql "select blog.title, blog.content, blog.publication_date, user.name from blog LEFT JOIN user on user.id = blog.author_id" []
 
 insertBlog :: SimpleBlog -> UTCTime -> Text -> ApiAction (Either Text ())
 insertBlog blog time name = do
@@ -215,7 +227,9 @@ deleteUser name =
     >>= \x ->
       if not x
         then return $ Left "User doesn't exist"
-        else runSQL (deleteWhere [UserName ==. name]) >> return (Right ())
+        else
+          runSQL (deleteWhere [UserName ==. name])
+            >> return (Right ())
 
 changePassword :: Text -> ChangePassword -> ApiAction (Either Text ())
 changePassword name pass = do
