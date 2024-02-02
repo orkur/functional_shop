@@ -18,9 +18,10 @@
 
 module Main where
 
-import Control.Monad.IO.Class (liftIO)
+import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Logger (LoggingT, runStdoutLoggingT)
 import Control.Monad.Trans.Maybe (MaybeT (MaybeT))
+import Control.Monad.Trans.Reader
 import Crypto.BCrypt
 import Data.Aeson.TH (defaultOptions, deriveJSON)
 import Data.List (map)
@@ -69,7 +70,7 @@ data SimpleUser = SimpleUser {name :: Text, email :: Text, password :: Text} der
 
 data ChangePassword = ChangePassword {oldPassword :: Text, newPassword :: Text} deriving (Generic, Show)
 
-data SimpleBlog = SimpleBlog {title :: Text, content :: Text} deriving (Generic, Show)
+data SimpleBlog = SimpleBlog {title :: Text, content :: Text, date :: Maybe UTCTime, author :: Maybe Text} deriving (Generic, Show)
 
 $(deriveJSON defaultOptions ''Credentials)
 $(deriveJSON defaultOptions ''SimpleUser)
@@ -144,10 +145,22 @@ app = do
           Right _ -> setStatus status200 >> text "Article added"
   get "articles" $ do
     allArticles <- runSQL $ selectList [] [Asc BlogPublicationDate]
-    json allArticles
+    json $ Data.List.map entityVal allArticles
   get "titles" $ do
     allArticles <- runSQL $ selectList [] [Asc BlogPublicationDate]
-    let foo = Data.List.map entityVal allArticles in json (Data.List.map blogTitle foo)
+    let foo = Data.List.map entityVal allArticles in json $ Data.List.map blogTitle foo
+  get "articles-and-authors" $ do
+    articles <- runSQL getArticleAndAuthor
+    json $
+      Data.List.map
+        ( \(Single titles, Single contents, Single publicationDates, Single authorNames) ->
+            SimpleBlog {title = titles, content = contents, date = Just publicationDates, author = Just authorNames}
+        )
+        articles
+
+-- bit shady, but documentation says that there aren't any other way to make join
+getArticleAndAuthor :: (MonadIO m) => ReaderT SqlBackend m [(Single Text, Single Text, Single UTCTime, Single Text)]
+getArticleAndAuthor = rawSql "select blog.title, blog.content, blog.publication_date, user.name from user, blog where user.id = blog.id" []
 
 insertBlog :: SimpleBlog -> UTCTime -> Text -> ApiAction (Either Text ())
 insertBlog blog time name = do
