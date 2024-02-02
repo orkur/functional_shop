@@ -23,6 +23,7 @@ import Control.Monad.Logger (LoggingT, runStdoutLoggingT)
 import Control.Monad.Trans.Maybe (MaybeT (MaybeT))
 import Crypto.BCrypt
 import Data.Aeson.TH (defaultOptions, deriveJSON)
+import Data.List (map)
 import Data.Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Data.Time (UTCTime, getCurrentTime)
@@ -141,6 +142,12 @@ app = do
         insertBlog blog time name >>= \case
           Left err -> setStatus status400 >> text err
           Right _ -> setStatus status200 >> text "Article added"
+  get "articles" $ do
+    allArticles <- runSQL $ selectList [] [Asc BlogPublicationDate]
+    json allArticles
+  get "titles" $ do
+    allArticles <- runSQL $ selectList [] [Asc BlogPublicationDate]
+    let foo = Data.List.map entityVal allArticles in json (Data.List.map blogTitle foo)
 
 insertBlog :: SimpleBlog -> UTCTime -> Text -> ApiAction (Either Text ())
 insertBlog blog time name = do
