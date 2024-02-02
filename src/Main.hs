@@ -153,14 +153,30 @@ app = do
     articles <- runSQL getArticleAndAuthor
     json $
       Data.List.map
-        ( \(Single titles, Single contents, Single publicationDates, Single authorNames) ->
-            SimpleBlog {title = titles, content = contents, date = Just publicationDates, author = Just authorNames}
-        )
+        makeSimpleBlog
         articles
+  get "user-article" $ do
+    articles <- runSQL getArticleAndAuthor
+    param <- paramsGet
+    case Prelude.length param of
+      1 -> case Prelude.head param of
+        ("name", authorName) ->
+          json $
+            Prelude.filter
+              ( \blog -> case author blog of
+                  Nothing -> False
+                  Just authorOfBlog -> authorOfBlog == authorName
+              )
+              (Data.List.map makeSimpleBlog articles)
+        (_, _) -> setStatus status400 >> text "Wrong param"
+      _ -> setStatus status400 >> text "Wrong param length"
+
+makeSimpleBlog :: (Single Text, Single Text, Single UTCTime, Single Text) -> SimpleBlog
+makeSimpleBlog (Single titles, Single contents, Single publicationDates, Single authorNames) = SimpleBlog {title = titles, content = contents, date = Just publicationDates, author = Just authorNames}
 
 -- bit shady, but documentation says that there aren't any other way to make join
 getArticleAndAuthor :: (MonadIO m) => ReaderT SqlBackend m [(Single Text, Single Text, Single UTCTime, Single Text)]
-getArticleAndAuthor = rawSql "select blog.title, blog.content, blog.publication_date, user.name from user, blog where user.id = blog.id" []
+getArticleAndAuthor = rawSql "select blog.title, blog.content, blog.publication_date, user.name from user, blog where user.id = blog.author_id" []
 
 insertBlog :: SimpleBlog -> UTCTime -> Text -> ApiAction (Either Text ())
 insertBlog blog time name = do
