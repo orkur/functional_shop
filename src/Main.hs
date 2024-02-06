@@ -61,7 +61,7 @@ Blog json
     publicationDate UTCTime
 Tags json
     name Text 
-    blog BlogId
+    blog BlogId onDeleteCascade
 |]
 
 data Credentials = Credentials {credUsername :: Text, credPassword :: Text} deriving (Generic, Show)
@@ -72,10 +72,13 @@ data ChangePassword = ChangePassword {oldPassword :: Text, newPassword :: Text} 
 
 data SimpleBlog = SimpleBlog {title :: Text, content :: Text, date :: Maybe UTCTime, author :: Maybe Text} deriving (Generic, Show)
 
+data Tag = Tag {tag :: Text, blogId :: Int64} deriving (Generic, Show)
+
 $(deriveJSON defaultOptions ''Credentials)
 $(deriveJSON defaultOptions ''SimpleUser)
 $(deriveJSON defaultOptions ''ChangePassword)
 $(deriveJSON defaultOptions ''SimpleBlog)
+$(deriveJSON defaultOptions ''Tag)
 
 type Api = SpockM SqlBackend () () ()
 
@@ -145,7 +148,8 @@ app = do
           Right _ -> setStatus status200 >> text "Article added"
   get "articles" $ do
     allArticles <- runSQL $ selectList [] [Asc BlogPublicationDate]
-    json $ Data.List.map entityVal allArticles
+    -- json $ Data.List.map entityVal allArticles
+    json allArticles
   get "titles" $ do
     allArticles <- runSQL $ selectList [] [Asc BlogPublicationDate]
     let foo = Data.List.map entityVal allArticles in json $ Data.List.map blogTitle foo
@@ -170,10 +174,31 @@ app = do
               (Data.List.map makeSimpleBlog articles)
         (_, _) -> setStatus status400 >> text "Wrong param"
       _ -> setStatus status400 >> text "Wrong param length"
+  post "add-tag" $ do
+    tagToPost <- jsonBody' :: ApiAction (Maybe Tag)
+    jwt <- jwtMiddleware
+    case (tagToPost, jwt) of
+      (Nothing, _) -> setStatus status404 >> text "Wrong json"
+      (_, Left err) -> setStatus status404 >> text err
+      (Just t, Right jwtName) ->
+        addTag t jwtName >>= \case
+          Left err -> setStatus status404 >> text err
+          Right _ -> setStatus status200 >> text "Tag added"
 
---   post "add-tag" $ do
-
--- -- TODO
+addTag :: Tag -> Text -> ApiAction (Either Text ())
+addTag tagData jwtName = do
+  blog <- runSQL $ selectFirst [BlogId ==. toSqlKey (blogId tagData)] []
+  authorMaybe <- getUserId jwtName
+  case (blog, authorMaybe) of
+    (Nothing, _) -> return $ Left "Wrong Id of tag"
+    (_, Left err) -> return $ Left err
+    (Just b, Right author) ->
+      case blogAuthorId (entityVal b) of
+        Nothing -> return $ Left "author of this blog does not exist"
+        Just blogAuth ->
+          if blogAuth == author
+            then runSQL (insert (Tags (tag tagData) (toSqlKey (blogId tagData)))) >> return (Right ())
+            else return $ Left "Wrong parameters"
 
 makeSimpleBlog :: (Single Text, Single Text, Single UTCTime, Single (Maybe Text)) -> SimpleBlog
 makeSimpleBlog (Single titles, Single contents, Single publicationDates, Single authorNames) =
